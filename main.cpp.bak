@@ -1,0 +1,368 @@
+#pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3dcompiler.lib")
+#include <vector>
+#include <chrono>
+#include <d3d11.h>
+#include <d3dcompiler.h>
+#define SDL_MAIN_HANDLED
+#include <SDL2/SDL_syswm.h>
+#include <SDL2/SDL.h>
+#include <dxgi.h>
+#include <dxgiformat.h>
+#include <d3dcommon.h>
+#include <Windows.h>
+#include <cmath>
+#include <SDL2/SDL_events.h>
+#include <SDL2/SDL_keyboard.h>
+#include <SDL2/SDL_mouse.h>
+#include <SDL2/SDL_scancode.h>
+#include <SDL2/SDL_stdinc.h>
+#include <SDL2/SDL_version.h>
+#include <SDL2/SDL_video.h>
+#include "material.h"
+#include "transform.h"
+#include "vec3.h"
+#include "sphere_object.h"
+#include "buffers.h"
+
+int flags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#ifdef _DEBUG
+	flags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+static constexpr int SCREEN_WIDTH = 1920;
+static constexpr int SCREEN_HEIGHT = 1080;
+
+static constexpr int RENDER_WIDTH = 1920;
+static constexpr int RENDER_HEIGHT = 1080;
+
+static constexpr int FOV = 100;
+
+static constexpr float CAMERA_SPEED = 4.0f;
+static constexpr float SHIFT_CAMERA_SPEED_MULTIPLIER = 2.2f;
+static constexpr float CONTROL_CAMERA_SPEED_MULTIPLIER = 0.3f;
+static constexpr float MOUSE_SENSITIVITY = 0.001f;
+
+int main()
+{
+	//std::vector<sphere_object> spheres =
+	//{
+	//	sphere_object(vec3(-15, 25, -50), 30, material(vec3(0, 0, 0), vec3(1, 0.83, 0.24), 0, 0.5)),
+	//	sphere_object(vec3(2, 0, -5), 1, material(vec3(0.2, 0.8, 0.2), vec3(0, 0, 0), 0, 0.5)),
+	//	sphere_object(vec3(-2, 0, -5), 1, material(vec3(0.2, 0.2, 0.8), vec3(0, 0, 0), 0, 0.5)),
+	//	sphere_object(vec3(0, -20.8, -5), 20, material(vec3(0.9, 0.2, 0.2), vec3(0, 0, 0), 1, 0.1))
+	//};
+
+	std::vector<sphere_object> spheres =
+	{
+		sphere_object(vec3(2, 17.8783f, -5), 1, material(vec3(244, 194, 194) / 255.0f, vec3(), 0, 0.5f)),
+		sphere_object(vec3(-1, 17.945f, -4), 1, material(vec3(137, 207, 240) / 255.0f, vec3(), 0, 0.5f)),
+		sphere_object(vec3(5, 50, -50), 20, material(vec3(), vec3(0.8f, 0.8f, 0.8f), 0, 0.5f)),
+		sphere_object(vec3(0, 2, -5), 15, material(vec3(0.9f, 0.9f, 0.9f), vec3(0, 0, 0), 0.1f, 0.5f)),
+
+		sphere_object(vec3(2, 0, -5), 2, material(vec3(0.2f, 0.2f, 0.8f), vec3(0, 0, 0), 0, 0.5f)),
+		sphere_object(vec3(-2, 0, -5), 2, material(vec3(0.8f, 0.2f, 0.2f), vec3(0, 0, 0), 0, 0.5f)),
+		sphere_object(vec3(2, 4, -5), 2, material(vec3(0.2f, 0.8f, 0.2f), vec3(0, 0, 0), 0, 0.5f)),
+		sphere_object(vec3(-2, 4, -5), 2, material(vec3(0.8f, 0.8f, 0.2f), vec3(0, 0, 0), 0, 0.5f)),
+
+		sphere_object(vec3(0, 2, -12), 5, material(vec3(0.1f, 0.1f, 0.1f), vec3(0.2f, 0.8f, 0.2f), 0, 0.5f)),
+		sphere_object(vec3(0, 2, 2), 5, material(vec3(0.1f, 0.1f, 0.1f), vec3(0.8f, 0.2f, 0.2f), 0, 0.5f)),
+		sphere_object(vec3(0, 11, -5), 5, material(vec3(0.1f, 0.1f, 0.1f), vec3(0.8f, 0.8f, 0.2f), 0, 0.5f)),
+		sphere_object(vec3(0, -7, -5), 5, material(vec3(0.1f, 0.1f, 0.1f), vec3(0.2, 0.2, 0.8), 0, 0.5f)),
+	};
+
+	transform camera(vec3(14, 2, -5), 4.71239f, 0.0f, 0);
+
+	ID3D11Device* device;
+	ID3D11DeviceContext* context;
+	D3D_FEATURE_LEVEL feature_level;
+
+	SDL_Init(SDL_INIT_VIDEO);
+	SDL_SetRelativeMouseMode(SDL_TRUE);
+	SDL_Window* window = SDL_CreateWindow("Ray Tracer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN);
+
+	SDL_SysWMinfo wmInfo;
+	HWND hwnd = {};
+	SDL_VERSION(&wmInfo.version);
+	if (SDL_GetWindowWMInfo(window, &wmInfo))
+	{
+		hwnd = wmInfo.info.win.window;
+	}
+
+	DXGI_SWAP_CHAIN_DESC swapchain_desc = {};
+	swapchain_desc.BufferCount = 2;
+	swapchain_desc.BufferDesc.Width = SCREEN_WIDTH;
+	swapchain_desc.BufferDesc.Height = SCREEN_HEIGHT;
+	swapchain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	swapchain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_UNORDERED_ACCESS;
+	swapchain_desc.OutputWindow = hwnd;
+	swapchain_desc.SampleDesc.Count = 1;
+	swapchain_desc.Windowed = TRUE;
+	swapchain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+
+	IDXGISwapChain* swapchain;
+	ID3D11RenderTargetView* rtv;
+
+	D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &swapchain_desc, &swapchain, &device, &feature_level, &context);
+
+	ID3DBlob* cs_blob = nullptr;
+	ID3DBlob* vs_blob = nullptr;
+	ID3DBlob* ps_blob = nullptr;
+	ID3DBlob* error_blob = nullptr;
+
+	D3DCompileFromFile(L"shader.hlsl", nullptr, nullptr, "cs_main", "cs_5_0", flags, 0, &cs_blob, &error_blob);
+	D3DCompileFromFile(L"fullscreen.hlsl", nullptr, nullptr, "vs_main", "vs_5_0", flags, 0, &vs_blob, &error_blob);
+	D3DCompileFromFile(L"fullscreen.hlsl", nullptr, nullptr, "ps_main", "ps_5_0", flags, 0, &ps_blob, &error_blob);
+
+	ID3D11ComputeShader* compute_shader;
+	ID3D11VertexShader* vertex_shader;
+	ID3D11PixelShader* pixel_shader;
+
+	device->CreateComputeShader(cs_blob->GetBufferPointer(), cs_blob->GetBufferSize(), nullptr, &compute_shader);
+	device->CreateVertexShader(vs_blob->GetBufferPointer(), vs_blob->GetBufferSize(), nullptr, &vertex_shader);
+	device->CreatePixelShader(ps_blob->GetBufferPointer(), ps_blob->GetBufferSize(), nullptr, &pixel_shader);
+
+	ID3D11Texture2D* backbuffer;
+	swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backbuffer);
+
+	device->CreateRenderTargetView(backbuffer, nullptr, &rtv);
+	backbuffer->Release();
+
+	D3D11_VIEWPORT viewport = {};
+	viewport.Width = (float)SCREEN_WIDTH;
+	viewport.Height = (float)SCREEN_HEIGHT;
+	viewport.MinDepth = 0.0f;
+	viewport.MaxDepth = 1.0f;
+	viewport.TopLeftX = 0.0f;
+	viewport.TopLeftY = 0.0f;
+
+	context->RSSetViewports(1, &viewport);
+
+	D3D11_SAMPLER_DESC samp_desc = {};
+	samp_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+	samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+	samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+
+	ID3D11SamplerState* sampler;
+	device->CreateSamplerState(&samp_desc, &sampler);
+
+	D3D11_TEXTURE2D_DESC output_desc = {};
+	output_desc.Width = RENDER_WIDTH;
+	output_desc.Height = RENDER_HEIGHT;
+	output_desc.MipLevels = 1;
+	output_desc.ArraySize = 1;
+	output_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	output_desc.SampleDesc.Count = 1;
+	output_desc.Usage = D3D11_USAGE_DEFAULT;
+	output_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+
+	ID3D11Texture2D* output_texture;
+	ID3D11UnorderedAccessView* outputUAV;
+	ID3D11ShaderResourceView* outputSRV;
+
+	D3D11_TEXTURE2D_DESC desc = {};
+	desc.Width = RENDER_WIDTH;
+	desc.Height = RENDER_HEIGHT;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	desc.SampleDesc.Count = 1;
+	desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+
+	device->CreateTexture2D(&desc, nullptr, &output_texture);
+	device->CreateUnorderedAccessView(output_texture, nullptr, &outputUAV);
+	device->CreateShaderResourceView(output_texture, nullptr, &outputSRV);
+
+	context->CSSetShader(compute_shader, nullptr, 0);
+
+	D3D11_TEXTURE2D_DESC staging_desc = output_desc;
+	staging_desc.Usage = D3D11_USAGE_STAGING;
+	staging_desc.BindFlags = 0;
+	staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+	ID3D11Texture2D* staging_texture;
+	device->CreateTexture2D(&staging_desc, nullptr, &staging_texture);
+
+	D3D11_TEXTURE2D_DESC accumulation_desc = {};
+	accumulation_desc.Width = RENDER_WIDTH;
+	accumulation_desc.Height = RENDER_HEIGHT;
+	accumulation_desc.MipLevels = 1;
+	accumulation_desc.ArraySize = 1;
+	accumulation_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	accumulation_desc.SampleDesc.Count = 1;
+	accumulation_desc.Usage = D3D11_USAGE_DEFAULT;
+	accumulation_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+
+	ID3D11Texture2D* accumulation_texture;
+	device->CreateTexture2D(&accumulation_desc, nullptr, &accumulation_texture);
+
+	ID3D11UnorderedAccessView* accumulationUAV;
+	device->CreateUnorderedAccessView(accumulation_texture, nullptr, &accumulationUAV);
+
+	std::vector<sphere_object_GPU> GPU_spheres;
+
+	for (const sphere_object& s : spheres)
+	{
+		sphere_object_GPU g;
+
+		g.center[0] = s.center.x;
+		g.center[1] = s.center.y;
+		g.center[2] = s.center.z;
+		g.radius = s.radius;
+
+		g.albedo[0] = s.mat.albedo.x;
+		g.albedo[1] = s.mat.albedo.y;
+		g.albedo[2] = s.mat.albedo.z;
+
+		g.emission[0] = s.mat.emission.x;
+		g.emission[1] = s.mat.emission.y;
+		g.emission[2] = s.mat.emission.z;
+
+		g.metallic = s.mat.metallic;
+		g.roughness = s.mat.roughness;
+
+		GPU_spheres.push_back(g);
+	}
+
+	ID3D11Buffer* sphere_buffer;
+
+	D3D11_BUFFER_DESC sphere_desc = {};
+	sphere_desc.Usage = D3D11_USAGE_DEFAULT;
+	sphere_desc.ByteWidth = sizeof(sphere_object_GPU) * GPU_spheres.size();
+	sphere_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	sphere_desc.StructureByteStride = sizeof(sphere_object_GPU);
+	sphere_desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+
+	D3D11_SUBRESOURCE_DATA data = {};
+	data.pSysMem = GPU_spheres.data();
+
+	device->CreateBuffer(&sphere_desc, &data, &sphere_buffer);
+
+	ID3D11ShaderResourceView* sphereSRV;
+
+	D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+	srv_desc.Format = DXGI_FORMAT_UNKNOWN;
+	srv_desc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+	srv_desc.Buffer.NumElements = GPU_spheres.size();
+
+	device->CreateShaderResourceView(sphere_buffer, &srv_desc, &sphereSRV);
+	context->CSSetShaderResources(0, 1, &sphereSRV);
+
+	ID3D11Buffer* constant_buffer;
+
+	D3D11_BUFFER_DESC constant_desc = {};
+	constant_desc.Usage = D3D11_USAGE_DYNAMIC;
+	constant_desc.ByteWidth = sizeof(cb_GPU);
+	constant_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	constant_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+	device->CreateBuffer(&constant_desc, nullptr, &constant_buffer);
+
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+	context->CSSetShader(compute_shader, nullptr, 0);
+	context->VSSetShader(vertex_shader, nullptr, 0);
+	context->PSSetShader(pixel_shader, nullptr, 0);
+
+	SDL_Event event;
+	transform prev_camera = camera;
+
+	float fov_scale = tan(FOV * M_PI / 360.0f);
+
+	double dt = 1 / 60.0f;
+	int frame = 1;
+	bool running = true;
+
+	while (running)
+	{
+		auto frame_start = std::chrono::steady_clock::now();
+
+		while (SDL_PollEvent(&event))
+		{
+			if (event.type == SDL_QUIT)
+				running = false;
+		}
+
+		int mx, my;
+		SDL_GetRelativeMouseState(&mx, &my);
+
+		camera.yaw -= mx * MOUSE_SENSITIVITY;
+		camera.pitch -= my * MOUSE_SENSITIVITY;
+		camera.pitch = min(max(camera.pitch, -1.5f), 1.5f);
+		camera.yaw = fmod(camera.yaw, 2.0 * M_PI);
+
+		vec3 forward = camera.get_forward();
+		vec3 right = camera.get_right(forward);
+		vec3 up = camera.get_up(forward, right);
+
+		const Uint8* keys = SDL_GetKeyboardState(nullptr);
+		float camera_speed = CAMERA_SPEED;
+		if (keys[SDL_SCANCODE_LSHIFT]) camera_speed *= SHIFT_CAMERA_SPEED_MULTIPLIER;
+		if (keys[SDL_SCANCODE_LCTRL]) camera_speed *= CONTROL_CAMERA_SPEED_MULTIPLIER;
+		if (keys[SDL_SCANCODE_W]) camera.position += forward * camera_speed * dt;
+		if (keys[SDL_SCANCODE_S]) camera.position -= forward * camera_speed * dt;
+		if (keys[SDL_SCANCODE_D]) camera.position += right * camera_speed * dt;
+		if (keys[SDL_SCANCODE_A]) camera.position -= right * camera_speed * dt;
+		if (keys[SDL_SCANCODE_SPACE]) camera.position += vec3(0.0f, 1.0f, 0.0f) * camera_speed * dt;
+		if (keys[SDL_SCANCODE_C]) camera.position -= vec3(0.0f, 1.0f, 0.0f) * camera_speed * dt;
+
+		if ((camera.position - prev_camera.position).magnitude_squared() > 1e-6f || mx != 0 || my != 0)
+		{
+			frame = 1;
+		}
+		prev_camera = camera;
+
+		D3D11_MAPPED_SUBRESOURCE cb_mapped;
+		if (SUCCEEDED(context->Map(constant_buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &cb_mapped)))
+		{
+			cb_GPU* g = (cb_GPU*)cb_mapped.pData;
+
+			g->cam_pos[0] = camera.position.x;
+			g->cam_pos[1] = camera.position.y;
+			g->cam_pos[2] = camera.position.z;
+
+			g->cam_forward[0] = forward.x;
+			g->cam_forward[1] = forward.y;
+			g->cam_forward[2] = forward.z;
+
+			g->cam_right[0] = right.x;
+			g->cam_right[1] = right.y;
+			g->cam_right[2] = right.z;
+
+			g->cam_up[0] = up.x;
+			g->cam_up[1] = up.y;
+			g->cam_up[2] = up.z;
+
+			g->fov_scale = fov_scale;
+			g->sphere_count = spheres.size();
+			g->frame = frame;
+
+			context->Unmap(constant_buffer, 0);
+		}
+		context->CSSetConstantBuffers(0, 1, &constant_buffer);
+
+		ID3D11UnorderedAccessView* uavs[] = { accumulationUAV, outputUAV };
+		context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+
+		context->Dispatch((RENDER_WIDTH + 15) / 16, (RENDER_HEIGHT + 15) / 16, 1);
+
+		ID3D11UnorderedAccessView* nullUAV[2] = { nullptr, nullptr };
+		context->CSSetUnorderedAccessViews(0, 2, nullUAV, nullptr);
+
+		context->OMSetRenderTargets(1, &rtv, nullptr);
+
+		context->PSSetShaderResources(0, 1, &outputSRV);
+		context->PSSetSamplers(0, 1, &sampler);
+
+		context->Draw(3, 0);
+		swapchain->Present(0, 0);
+
+		++frame;
+
+		auto frame_end = std::chrono::steady_clock::now();
+		dt = std::chrono::duration<double>(frame_end - frame_start).count();
+	}
+
+	return 0;
+}
